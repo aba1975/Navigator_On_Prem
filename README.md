@@ -26,9 +26,16 @@ hardware:
 
 | # | Caveat | Consequence |
 |---|---|---|
-| 1 | A **standalone** (codec-less) Navigator with **zero cloud** is documented as *Persistent Web App only* — you don't get Cisco's native scheduler UI | Either pair the Navigator to a codec (native UI, fully local) or build your own booking web app for standalone panels |
+| 1 | **Settled:** zero-cloud means `Provisioning Mode: Off` ("customer managed"), and Cisco documents the entire `Bookings` family plus `RoomScheduler Enabled` as not applicable in that mode | Standalone panels run a **Persistent Web App** — our own UI — with the LED strip driven manually. See [docs/standalone-navigator-constraints.md](docs/standalone-navigator-constraints.md) |
 | 2 | Cisco's **"Permitted Commercial Use for Scheduled Meeting Join Experience"** clause covers `Bookings Put` and equivalents | Internal use is explicitly permitted. Productising/reselling this needs written permission from Cisco |
 | 3 | A room mailbox can only **decline its own copy** of a meeting; only the organizer can truly cancel it | Sensor-driven "release" leaves a ghost on the organizer's calendar unless *your* service is the organizer of record |
+
+Two findings confirmed on our own hardware:
+
+- `xCommand Bookings *` **works over the local API on a RoomOS video codec**.
+- `xCommand Bookings *` **does not work from a macro** — consistent with
+  `Bookings Put` being `role: [Admin]`. All booking writes come from an
+  external broker, which is the right design anyway.
 
 Full reasoning: [docs/self-hosted-feasibility.md](docs/self-hosted-feasibility.md).
 
@@ -63,27 +70,35 @@ Detail and sources: [docs/how-webex-works-today.md](docs/how-webex-works-today.m
 
 ## Proposed self-hosted architecture
 
+Two independent devices per room, joined by the broker — replacing the Webex
+Workspace association that used to connect them.
+
 ```
-                   ┌───────────────────────────────────────────┐
-  RoomOS codec ───▶│                                           │
-  (sensors,        │          booking broker (this repo)       │
-   bookings,       │                                           │
-   UI events)      │  • occupancy state machine                │
-      ▲            │  • booking reconciler (room ⇄ calendar)   │
-      │            │  • calendar driver interface              │
-      └────────────│                                           │
-   Bookings Put/   └──────────────────┬────────────────────────┘
-   Book/Delete                        │
-                       ┌──────────────┼───────────────┬──────────────┐
-                       ▼              ▼               ▼              ▼
-                  MS Graph        EWS (on-prem)   Google Cal      CalDAV
-                  (Exch Online)                   (Workspace)   (Nextcloud…)
+  MEETING ROOM                                   CALENDAR
+  ┌──────────────────────────┐
+  │ Room Navigator           │   UI + LED
+  │ standalone · outside room│──────────┐
+  │ Provisioning Mode: Off   │          │
+  │ PersistentWebApp         │          ▼
+  └──────────────────────────┘    ┌───────────┐      ┌──────────────────┐
+  ┌──────────────────────────┐    │  broker   │─────▶│ Exchange Online  │
+  │ RoomOS video device      │    │           │Graph │ EWS · Google     │
+  │ people count / presence  │───▶│           │      │ CalDAV           │
+  └──────────────────────────┘    └───────────┘      └──────────────────┘
+                          sensors
 ```
 
 The broker owns one reconciliation loop per room: pull the authoritative
-calendar view, push it to the device with `Bookings Put`, subscribe to device
-events (`Bookings BookingRequested`, `RoomAnalytics PeopleCount`), and write
-user-initiated changes back to the calendar.
+calendar view, render it in the panel web app, drive the LED strip with
+`UserInterface LedControl Color Set`, subscribe to occupancy on the codec, and
+write user-initiated changes back to the calendar.
+
+## Concept deck
+
+[`concept/Self-hosted-room-booking-concept.pptx`](concept/) — 17 slides
+covering the device configuration, panel UI mockups, booking and release
+flows, the Graph integration and the management UI. Mockup sources are in
+`concept/src/` and regenerate with Playwright + python-pptx.
 
 ## Status
 
@@ -96,5 +111,6 @@ items that need a lab endpoint to settle.
 | Document | Contents |
 |---|---|
 | [docs/how-webex-works-today.md](docs/how-webex-works-today.md) | The Webex/Control Hub/Hybrid Calendar architecture as it exists now |
+| [docs/standalone-navigator-constraints.md](docs/standalone-navigator-constraints.md) | **Settled constraint:** what customer-managed mode allows, and the one open lab test |
 | [docs/self-hosted-feasibility.md](docs/self-hosted-feasibility.md) | Device-side API surface, what's possible, gaps, risks, phasing |
 | [docs/calendar-backends.md](docs/calendar-backends.md) | Graph / EWS / Google / CalDAV integration detail and pitfalls |

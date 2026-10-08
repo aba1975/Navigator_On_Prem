@@ -133,6 +133,11 @@ request/created/failed triad is designed for exactly that async round-trip.
   or self-signed certs. **Only one in-flight HTTP request per device** — a
   second before awaiting the first throws `"No available http connections"`.
 
+> **Confirmed on our hardware: `xCommand Bookings *` does not work from a
+> macro.** This is consistent with `Bookings Put` being `role: [Admin]`, which
+> the macro runtime does not carry. Macros are therefore not an option for
+> booking writes — use the external broker over WebSocket or HTTP.
+
 Recommended split: WebSocket subscription from the broker for state, macros
 only for UI glue that must survive broker downtime.
 
@@ -151,24 +156,38 @@ replacement means Persistent Web App.
 
 ---
 
-## 5. Hardware topology decision
+## 5. Hardware topology — decided
 
-This follows directly from caveat 1 in the README.
+The deployment must be zero-cloud, which settles this. See
+[standalone-navigator-constraints.md](standalone-navigator-constraints.md) for
+the full evidence.
 
 | Topology | Native scheduler UI | Sensors | Cloud required |
 |---|---|---|---|
-| Codec + **paired** Navigator | **Yes** | Yes (codec) | **No** |
-| **Standalone** Navigator, Control Hub registered | Yes | No | **Yes** |
-| **Standalone** Navigator, unregistered (RoomOS 11.9.2.4+) | No — Persistent Web App only | No | No |
+| Codec + **paired** Navigator | Yes | Yes (codec) | No |
+| **Standalone** Navigator, Control Hub registered | Yes | No | **Yes** — ruled out |
+| **Standalone** Navigator, customer managed (`Provisioning Mode: Off`) | No — Persistent Web App only | No | **No** ← chosen |
 
-> *"In standalone mode, the Room Navigator is only supported with Persistent
-> Web App mode... In this scenario, it is not possible to register the Room
-> Navigator to a Cisco management system."*
+**Chosen topology: standalone customer-managed Navigator outside the room,
+plus a separate in-room RoomOS video device as the occupancy source.** The
+panel runs our own Persistent Web App and we drive the LED strip manually with
+`UserInterface LedControl Color Set`. The two devices have no native link —
+the broker correlates them, replacing the Webex Workspace association.
 
-**Recommendation: codec + paired Navigator.** You get the native UI, the
-sensors and zero cloud dependency simultaneously. The classic
-outside-the-door-panel deployment is the one case that forces either Control
-Hub or a custom web app.
+Per-room device configuration:
+
+```
+xCommand Provisioning SetType Type: Standalone
+xCommand SystemUnit SetTouchPanelMode Mode: PersistentWebApp
+xConfiguration Provisioning Mode: Off
+xConfiguration SystemUnit TouchPanel Location: OutsideRoom
+xConfiguration UserInterface LedControl Mode: Manual
+xConfiguration Security Xapi WebSocket ApiKey Allowed: True
+xConfiguration WebEngine Features Xapi Peripherals AllowedHosts Hosts: <broker>
+```
+
+On the in-room codec, `xConfiguration RoomAnalytics PeopleCountOutOfCall: On`
+is required — it is off by default, and on Codec EQ/Pro it needs a Quad Camera.
 
 ---
 
@@ -225,28 +244,34 @@ Design notes worth fixing early:
 
 ## 8. Open questions needing a lab endpoint
 
-- **OQ-1** — Confirm `Bookings Put/Book/List` work on a **pure CUCM-registered
-  or unregistered** codec with paired Navigator. Documentation strongly implies
-  yes; no sentence states it outright.
+- **OQ-1** — **Settled for the Navigator:** customer-managed mode excludes the
+  whole `Bookings` family per Cisco's stand-alone guide. The residual test is
+  whether that restriction still holds on RoomOS 26, since the guide has not
+  been revised since April 2024 while the general schema tags Bookings for the
+  Navigator without a caveat. Cheap to test — see stage 1.
 - **OQ-2** — Confirm what the native check-in/release flow does at the
   *mailbox protocol* level, to decide whether to mirror it or replace it.
 - **OQ-3** — Characterise `PeopleCount` / `PeoplePresence` latency, debounce
   and false-negative behaviour in a real room.
 - **OQ-4** — Confirm whether a standalone Navigator in scheduling mode consumes
-  a specific Webex licence (no public source found); moot for the unregistered
-  path.
-- **OQ-5** — Verify `UserInterface RoomScheduler Mode` and the LED strip
-  behave correctly when bookings arrive purely via `Bookings Put` with no
-  Hybrid Calendar present.
+  a specific Webex licence (no public source found); moot for our path.
+- **OQ-5** — Verify the Persistent Web App can bind to the local xAPI via
+  `Security Xapi WebSocket ApiKey Allowed` and drive `LedControl Color Set`
+  end to end.
 
 ## 9. Suggested phasing
 
-1. **Spike** — one codec + paired Navigator, hardcoded JSON, prove `Bookings
-   Put` renders on the panel unregistered. Settles OQ-1 and OQ-5 in a day.
+1. **Spike** — one Navigator, factory reset, *Set up as standalone → Customer
+   managed*, Persistent Web App pointing at a stub page. Prove the web app
+   renders, binds to the local xAPI, and that `LedControl Color Set` changes
+   the strip. While there, try `SetTouchPanelMode Mode: Scheduler` plus
+   `Bookings Put` to settle OQ-1. One afternoon.
 2. **Read-only** — Graph driver, one room, calendar → panel. No writes.
-3. **Ad-hoc booking** — `BookingRequested` → Graph write → confirm.
-4. **Occupancy release** — sensor subscription, state machine, release policy.
-5. **Multi-backend + scale** — driver interface, EWS/Google/CalDAV, many rooms.
+3. **Ad-hoc booking** — panel tap → Graph write → confirm.
+4. **Occupancy release** — subscribe to the in-room codec, state machine,
+   release policy.
+5. **Multi-backend + scale** — driver interface, EWS/Google/CalDAV, many rooms,
+   management UI.
 
 ## Sources
 
